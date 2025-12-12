@@ -17,9 +17,11 @@ Explore the live version of the project here:
 
 ```
 Task/
+│
 ├── LICENSE
-└── README.md
+├── README.md
 └── index.html
+
 ```
 
 * `index.html`: The main HTML file rendering the web page.
