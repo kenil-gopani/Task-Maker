@@ -589,7 +589,7 @@ Task three" required></textarea>
         <textarea id="note">I am leaving for the day. 👋</textarea>
         <div class="controls">
           <button class="btn" type="submit">Format</button>
-          <button class="ghost" type="submit">Save</button>
+          <button class="ghost" type="button" id="saveBtn">Save</button>
         </div>
       </form>
     </section>
@@ -628,46 +628,165 @@ Task three" required></textarea>
   <div id="messageBox" class="message-box"></div>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+    // Firebase Configuration
     const firebaseConfig = {
       apiKey: "AIzaSyAOxSmfthgQpJ6ma6KyCxZiL8eILiN5guM",
       authDomain: "taskformatterapp.firebaseapp.com",
       projectId: "taskformatterapp",
       storageBucket: "taskformatterapp.firebasestorage.app",
       messagingSenderId: "502761077532",
-      appId: "1:502761077532:web:cc6cc3801c537c29efd8d9"
+      appId: "1:502761077532:web:cc6cc3801c537c29efd8d9",
+      measurementId: "G-RF9FM98869"
     };
 
-    let db, auth, userId;
+    // Global variables
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-task-app';
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-    function showMessage(msg) {
-      const box = document.getElementById('messageBox');
-      box.textContent = msg; box.classList.add('show');
-      setTimeout(() => box.classList.remove('show'), 1500);
+    let db;
+    let auth;
+    let userId = null;
+    let isAuthReady = false;
+
+    // Function to display custom messages
+    function showMessage(message, duration = 2000) {
+      const messageBox = document.getElementById('messageBox');
+      messageBox.textContent = message;
+      messageBox.classList.add('show');
+      setTimeout(() => {
+        messageBox.classList.remove('show');
+      }, duration);
     }
 
-    function formatDate(d) { return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear() }
+    // Initialize Firebase
+    async function initializeFirebase() {
+      const app = initializeApp(firebaseConfig);
+      db = getFirestore(app);
+      auth = getAuth(app);
+
+      onAuthStateChanged(auth, async (user) => {
+        if (user) {
+          userId = user.uid;
+          console.log('Firebase user authenticated:', userId);
+          isAuthReady = true;
+          loadTasksFromFirestore();
+        } else {
+          try {
+            if (initialAuthToken) {
+              await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+              await signInAnonymously(auth);
+            }
+          } catch (error) {
+            console.error('Firebase authentication failed:', error);
+            showMessage('Failed to sign in. Please try again.');
+          }
+        }
+      });
+    }
+
+    // Firestore reference for user-specific tasks
+    function getTasksDocRef() {
+      if (!db || !userId) {
+        console.error('Firestore or User ID not ready.');
+        return null;
+      }
+      return doc(db, `artifacts/${appId}/users/${userId}/tasks`, 'currentTasks');
+    }
+
+    // Save tasks to Firestore
+    async function saveTasksToFirestore(tasksContent) {
+      if (!isAuthReady || !db || !userId) {
+        console.warn('Cannot save tasks: Authentication not ready.');
+        showMessage('Not ready to save. Please wait or refresh.');
+        return;
+      }
+      const tasksDocRef = getTasksDocRef();
+      if (!tasksDocRef) return;
+
+      try {
+        await setDoc(tasksDocRef, { content: tasksContent });
+        console.log('Tasks saved to Firestore successfully!');
+        showMessage('Tasks saved! ✓');
+      } catch (error) {
+        console.error('Error saving tasks:', error);
+        showMessage('Save failed: ' + error.message);
+      }
+    }
+
+    // Load tasks from Firestore with real-time updates
+    function loadTasksFromFirestore() {
+      if (!isAuthReady || !db || !userId) {
+        console.warn('Cannot load tasks: Authentication not ready.');
+        return;
+      }
+      const tasksDocRef = getTasksDocRef();
+      if (!tasksDocRef) return;
+
+      onSnapshot(tasksDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data && data.content) {
+            document.getElementById('tasks').value = data.content;
+            console.log('Tasks loaded from Firestore');
+          }
+        } else {
+          console.log('No tasks found in Firestore.');
+        }
+      }, (error) => {
+        console.error('Error listening to tasks:', error);
+        showMessage('Failed to load tasks: ' + error.message);
+      });
+    }
+
+    // Format date helper
+    function formatDate(d) {
+      return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
+    }
+
+    // Set today's date
     document.getElementById('date').value = formatDate(new Date());
 
     const form = document.getElementById('taskForm');
     const output = document.getElementById('output');
     const previewDate = document.getElementById('previewDate');
 
+    // Format button handler - shows preview AND saves tasks
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const date = document.getElementById('date').value.trim();
       const tasksRaw = document.getElementById('tasks').value.trim();
       const note = document.getElementById('note').value.trim();
+
+      if (!date || !tasksRaw) {
+        showMessage('Please enter date and tasks.');
+        return;
+      }
+
       const tasks = tasksRaw.split('\n').filter(Boolean).map(t => ' - ' + t.trim()).join('\n');
       let msg = `Date : ${date}\n\n${tasks}`;
       if (note) msg += `\n\n${note}`;
       output.textContent = msg;
       previewDate.textContent = date;
-      if (db && userId) await setDoc(doc(db, 'tasks', userId), { tasks: tasksRaw });
+
+      // Also save tasks to Firebase
+      await saveTasksToFirestore(tasksRaw);
     });
 
+    // Save button handler
+    document.getElementById('saveBtn').addEventListener('click', async () => {
+      const tasksRaw = document.getElementById('tasks').value.trim();
+      if (!tasksRaw) {
+        showMessage('No tasks to save!');
+        return;
+      }
+      await saveTasksToFirestore(tasksRaw);
+    });
+
+    // Copy button handler
     document.getElementById('copyBtn').addEventListener('click', () => {
       const copyIcon = document.getElementById('copyIcon');
       const copyText = document.getElementById('copyText');
@@ -681,7 +800,6 @@ Task three" required></textarea>
       navigator.clipboard.writeText(text);
       showMessage('Copied!');
 
-      // Change to green checkmark icon
       copyIcon.innerHTML = `
         <svg aria-hidden="true" height="16" viewBox="0 0 16 16" width="16" class="octicon" style="fill: #22c55e;">
           <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>
@@ -690,7 +808,6 @@ Task three" required></textarea>
       copyText.textContent = 'Copied!';
       copyText.style.color = '#22c55e';
 
-      // Revert back to copy icon after 1.5 seconds
       setTimeout(() => {
         copyIcon.innerHTML = `
           <svg aria-hidden="true" height="16" viewBox="0 0 16 16" width="16" class="octicon">
@@ -703,9 +820,8 @@ Task three" required></textarea>
       }, 1500);
     });
 
-    const app = initializeApp(firebaseConfig);
-    auth = getAuth(app); db = getFirestore(app);
-    onAuthStateChanged(auth, u => { if (u) userId = u.uid; else signInAnonymously(auth) });
+    // Initialize Firebase when page loads
+    window.onload = initializeFirebase;
   </script>
 </body>
 
